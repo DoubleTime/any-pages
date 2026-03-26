@@ -780,6 +780,26 @@ function daysBetween(a, b) {
   return Math.round((b - a) / 86400000);
 }
 
+function workingDaysBetween(a, b) {
+  let count = 0;
+  const cur = new Date(a);
+  while (cur <= b) {
+    if (cur.getDay() !== 0 && cur.getDay() !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
+function addWorkingDays(d, n) {
+  const r = new Date(d);
+  let added = 0;
+  while (added < n) {
+    r.setDate(r.getDate() + 1);
+    if (r.getDay() !== 0 && r.getDay() !== 6) added++;
+  }
+  return r;
+}
+
 function fmtDate(d) {
   if (!d) return '—';
   return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
@@ -895,15 +915,15 @@ async function loadData() {
         t.endDate     = stripTime(t.completedDate);
         t.rangeSource = 'completed';
         // Derive effective days for tooltip display
-        t.effectiveDays = Math.max(1, daysBetween(stripTime(t.startDate), t.endDate) + 1);
+        t.effectiveDays = Math.max(1, workingDaysBetween(stripTime(t.startDate), t.endDate));
       } else if (t.dayUsed > 0) {
         // Rule 2: Day Used column has a number
-        t.endDate     = addDays(t.startDate, Math.ceil(t.dayUsed) - 1);
+        t.endDate     = addWorkingDays(t.startDate, Math.ceil(t.dayUsed) - 1);
         t.rangeSource = 'dayUsed';
         t.effectiveDays = t.dayUsed;
       } else if (t.etaDays > 0) {
         // Rule 3: fallback to ETA Man Day
-        t.endDate     = addDays(t.startDate, Math.ceil(t.etaDays) - 1);
+        t.endDate     = addWorkingDays(t.startDate, Math.ceil(t.etaDays) - 1);
         t.rangeSource = 'eta';
         t.effectiveDays = t.etaDays;
       } else {
@@ -925,9 +945,12 @@ async function loadData() {
     // Second pass: auto-queue tasks without startDate that have etaDays
     tasks.filter(t => !t.startDate && t.etaDays > 0).forEach(t => {
       const key = (t.pic || '__none__').toLowerCase();
-      const after = picLastEnd[key] ? addDays(picLastEnd[key], 1) : new Date();
+      let after = picLastEnd[key] ? addDays(picLastEnd[key], 1) : new Date();
+      while (after.getDay() === 0 || after.getDay() === 6) {
+        after = addDays(after, 1);
+      }
       t.startDate     = stripTime(after);
-      t.endDate       = addDays(t.startDate, Math.ceil(t.etaDays) - 1);
+      t.endDate       = addWorkingDays(t.startDate, Math.ceil(t.etaDays) - 1);
       t.effectiveDays = t.etaDays;
       t.rangeSource   = 'auto';
       t.autoQueued    = true;
@@ -1055,6 +1078,36 @@ function renderAll(allTasks, scheduled, unscheduled, headers, cols) {
 
       const sty = statusStyle(t.status);
       const barColor  = color;
+      
+      const sLower = (t.status || '').toLowerCase();
+      let stateCat = 'todo';
+      if (sLower.includes('done') || sLower.includes('complet') || sLower.includes('finish')) stateCat = 'completed';
+      else if (sLower.includes('review') || sLower.includes('test') || sLower.includes('qa')) stateCat = 'testing';
+      else if (sLower.includes('progress') || sLower.includes('doing') || sLower.includes('wip')) stateCat = 'in_progress';
+
+      let bgStyle, borderStyle, labelCol, textShadow;
+      if (stateCat === 'completed') {
+        bgStyle = barColor;
+        borderStyle = `1.5px solid ${barColor}`;
+        labelCol = '#ffffff';
+        textShadow = '0 1px 3px rgba(0,0,0,0.8)';
+      } else if (stateCat === 'testing') {
+        bgStyle = barColor + '80';
+        borderStyle = `1.5px solid ${barColor}`;
+        labelCol = '#ffffff';
+        textShadow = '0 1px 3px rgba(0,0,0,0.8)';
+      } else if (stateCat === 'in_progress') {
+        bgStyle = barColor + '40';
+        borderStyle = `1.5px solid ${barColor}`;
+        labelCol = barColor;
+        textShadow = 'none';
+      } else {
+        bgStyle = 'transparent';
+        borderStyle = `1.5px dashed ${barColor}a0`;
+        labelCol = barColor;
+        textShadow = 'none';
+      }
+
       // Store data in global map keyed by unique index — avoids HTML attribute escaping issues
       const bidx = barIdx++;
       BAR_DATA[bidx] = {
@@ -1078,8 +1131,8 @@ function renderAll(allTasks, scheduled, unscheduled, headers, cols) {
                  data-bidx="${bidx}"
                  onmouseenter="showTipIdx(event,${bidx})" onmouseleave="hideTip()">
               <div class="gantt-bar ${t.autoQueued?'auto-queued':''}"
-                   style="width:100%;background:${barColor}20;border:1.5px solid ${barColor}">
-                <span class="gantt-bar-label" style="color:${barColor}">${t.task}</span>
+                   style="width:100%;background:${bgStyle};border:${borderStyle}">
+                <span class="gantt-bar-label" style="color:${labelCol};text-shadow:${textShadow}">${t.task}</span>
               </div>
             </div>
           </div>
