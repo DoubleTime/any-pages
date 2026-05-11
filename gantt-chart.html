@@ -877,24 +877,29 @@ async function loadData() {
       const etaVal  = cols.eta     >= 0 ? r[cols.eta]?.trim()     : '';
       return !!(taskVal || picVal || startVal || etaVal);
     });
-    const tasks = raw.map((r, idx) => ({
-      idx,
-      task:         cols.task        >= 0 ? r[cols.task]?.trim()        || '' : '',
-      pic:          cols.pic         >= 0 ? r[cols.pic]?.trim()         || '' : '',
-      startRaw:     cols.startAt     >= 0 ? r[cols.startAt]?.trim()     || '' : '',
-      completedRaw: cols.completedAt >= 0 ? r[cols.completedAt]?.trim() || '' : '',
-      dayUsedRaw:   cols.dayUsed     >= 0 ? r[cols.dayUsed]?.trim()     || '' : '',
-      etaRaw:       cols.eta         >= 0 ? r[cols.eta]?.trim()         || '' : '',
-      status:       cols.status      >= 0 ? r[cols.status]?.trim()      || '' : '',
-      notes:        cols.notes       >= 0 ? r[cols.notes]?.trim()       || '' : '',
-      priority:     cols.priority    >= 0 ? r[cols.priority]?.trim()    || '' : '',
-      startDate:    null,
-      endDate:      null,
-      etaDays:      0,
-      dayUsed:      0,
-      rangeSource:  '',   // 'completed' | 'dayUsed' | 'eta' | 'auto'
-      autoQueued:   false,
-    }));
+    const tasks = raw.map((r, idx) => {
+      const rawPic = cols.pic >= 0 ? r[cols.pic]?.trim() || '' : '';
+      const pics = rawPic.split(/[,\n]+/).map(p => p.trim()).filter(Boolean);
+      return {
+        idx,
+        task:         cols.task        >= 0 ? r[cols.task]?.trim()        || '' : '',
+        picRaw:       rawPic,
+        pics:         pics,
+        startRaw:     cols.startAt     >= 0 ? r[cols.startAt]?.trim()     || '' : '',
+        completedRaw: cols.completedAt >= 0 ? r[cols.completedAt]?.trim() || '' : '',
+        dayUsedRaw:   cols.dayUsed     >= 0 ? r[cols.dayUsed]?.trim()     || '' : '',
+        etaRaw:       cols.eta         >= 0 ? r[cols.eta]?.trim()         || '' : '',
+        status:       cols.status      >= 0 ? r[cols.status]?.trim()      || '' : '',
+        notes:        cols.notes       >= 0 ? r[cols.notes]?.trim()       || '' : '',
+        priority:     cols.priority    >= 0 ? r[cols.priority]?.trim()    || '' : '',
+        startDate:    null,
+        endDate:      null,
+        etaDays:      0,
+        dayUsed:      0,
+        rangeSource:  '',   // 'completed' | 'dayUsed' | 'eta' | 'auto'
+        autoQueued:   false,
+      };
+    });
 
     // Parse dates & raw values
     tasks.forEach(t => {
@@ -938,14 +943,25 @@ async function loadData() {
     const picLastEnd = {};
     // First pass: track latest end per PIC from scheduled tasks
     tasks.filter(t => t.startDate).forEach(t => {
-      const key = (t.pic || '__none__').toLowerCase();
-      if (!picLastEnd[key] || t.endDate > picLastEnd[key]) picLastEnd[key] = t.endDate;
+      const keys = t.pics.length > 0 ? t.pics : ['__none__'];
+      keys.forEach(p => {
+        const key = p.toLowerCase();
+        if (!picLastEnd[key] || t.endDate > picLastEnd[key]) picLastEnd[key] = t.endDate;
+      });
     });
 
     // Second pass: auto-queue tasks without startDate that have etaDays
     tasks.filter(t => !t.startDate && t.etaDays > 0).forEach(t => {
-      const key = (t.pic || '__none__').toLowerCase();
-      let after = picLastEnd[key] ? addDays(picLastEnd[key], 1) : new Date();
+      const keys = t.pics.length > 0 ? t.pics : ['__none__'];
+      let maxLastEnd = null;
+      keys.forEach(p => {
+        const key = p.toLowerCase();
+        if (picLastEnd[key]) {
+          if (!maxLastEnd || picLastEnd[key] > maxLastEnd) maxLastEnd = picLastEnd[key];
+        }
+      });
+      
+      let after = maxLastEnd ? addDays(maxLastEnd, 1) : new Date();
       while (after.getDay() === 0 || after.getDay() === 6) {
         after = addDays(after, 1);
       }
@@ -954,7 +970,10 @@ async function loadData() {
       t.effectiveDays = t.etaDays;
       t.rangeSource   = 'auto';
       t.autoQueued    = true;
-      picLastEnd[key] = t.endDate;
+      
+      keys.forEach(p => {
+        picLastEnd[p.toLowerCase()] = t.endDate;
+      });
     });
 
     // Classify unscheduled = no startDate AND no etaDays
@@ -1018,9 +1037,11 @@ function renderAll(allTasks, scheduled, unscheduled, headers, cols) {
   // Group tasks by PIC
   const picMap = {};
   scheduled.forEach(t => {
-    const key = t.pic || '(Unassigned)';
-    if (!picMap[key]) picMap[key] = [];
-    picMap[key].push(t);
+    const keys = t.pics.length > 0 ? t.pics : ['(Unassigned)'];
+    keys.forEach(key => {
+      if (!picMap[key]) picMap[key] = [];
+      picMap[key].push(t);
+    });
   });
 
   // Stats
@@ -1111,7 +1132,7 @@ function renderAll(allTasks, scheduled, unscheduled, headers, cols) {
       // Store data in global map keyed by unique index — avoids HTML attribute escaping issues
       const bidx = barIdx++;
       BAR_DATA[bidx] = {
-        task: t.task, pic: t.pic, status: t.status,
+        task: t.task, pic: t.picRaw, status: t.status,
         startDate: fmtDate(t.startDate), endDate: fmtDate(t.endDate),
         etaDays: t.etaDays, dayUsed: t.dayUsed,
         effectiveDays: t.effectiveDays, rangeSource: t.rangeSource,
@@ -1209,9 +1230,11 @@ function renderUnscheduledHTML(unscheduled) {
   // Group by PIC
   const picGroups = {};
   unscheduled.forEach(t => {
-    const key = t.pic || '(Unassigned)';
-    if (!picGroups[key]) picGroups[key] = [];
-    picGroups[key].push(t);
+    const keys = t.pics.length > 0 ? t.pics : ['(Unassigned)'];
+    keys.forEach(key => {
+      if (!picGroups[key]) picGroups[key] = [];
+      picGroups[key].push(t);
+    });
   });
 
   const groupsHTML = Object.entries(picGroups).map(([pic, tasks]) => {
